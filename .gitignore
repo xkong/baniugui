@@ -52,3 +52,11 @@ docs/_build/
 
 # PyBuilder
 target/
+/cmd.exe
+/update.bat
+/*.ini
+/baniugui_zh_CN.ts
+/resource
+/baniu.pro
+/baniugui.qrc
+/main.ui
