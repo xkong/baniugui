@@ -122,6 +122,7 @@ class MainWindow(QtGui.QMainWindow):
                 filter=self.tr("ConfigFiles(*.ini)"))
             if not file_:
                 return
+            file_ = file_[0]
         else:
             file_ = CONFIG_FILE
         self._load_default_config(file_)
