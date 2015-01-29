@@ -23,7 +23,7 @@ from main_ui import Ui_MainWindow
 CONFIG_FILE = "baniu.ini"
 files_queue = Queue.Queue()
 uploaded_queue = Queue.Queue()
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 QT_VERSION_STR = "4.8"
 PYSIDE_VERSION_STR = "1.2.2"
 
@@ -35,6 +35,9 @@ class MainWindow(QtGui.QMainWindow):
         self.ui.setupUi(self)
 
         self._thread_pool = []
+
+        # Default open directory of QFileDialog.
+        self._default_dir = '.'
 
         self._setup_ui()
         self._init_binding()
@@ -76,6 +79,7 @@ class MainWindow(QtGui.QMainWindow):
     def clear(self):
         self.ui.table_widget.setRowCount(0)
         self.ui.table_widget.setColumnCount(2)
+        self.prefix = ''
 
         self.ui.statusbar.showMessage("")
         self.ui.progressBar.setValue(0)
@@ -83,6 +87,8 @@ class MainWindow(QtGui.QMainWindow):
             files_queue.queue.clear()
         with uploaded_queue.mutex:
             uploaded_queue.queue.clear()
+
+        self._thread_pool = []
 
     def about(self):
         title = self.tr("About Baniu CDN Upload Tool")
@@ -103,14 +109,18 @@ class MainWindow(QtGui.QMainWindow):
 
         """
         files = QtGui.QFileDialog.getOpenFileNames(
-            self, self.tr("Select Files"),)
+            self, self.tr("Select Files"),
+            self._default_dir)
         for filename in files[0]:
             self._add_table_item(filename)
 
     def select_dir(self):
         dir_ = QtGui.QFileDialog.getExistingDirectory(
-            self, self.tr("Select Directory"),)
-        self._add_table_item(dir_, 'd')
+            self, self.tr("Select Directory"),
+            self._default_dir)
+        if dir_:
+            self._default_dir = os.path.join(dir_, '..')
+            self._add_table_item(dir_, 'd')
 
     def load_config(self):
         """
@@ -134,21 +144,29 @@ class MainWindow(QtGui.QMainWindow):
             field_name = widget.objectName().replace("edt_", "")
             field_name = field_name.encode('utf-8')
             widget.setText(config.baniu.get(field_name, ""))
+        dir_ = config.baniu.get("dir", '')
+        if dir_:
+            self._default_dir = dir_
 
     def save_config(self):
         """
         Save config to file.
         """
+        self._save_config()
+        self.alert(self.tr("Config was saved into {0}").format(CONFIG_FILE))
+
+    def _save_config(self):
         if not os.path.isfile(CONFIG_FILE):
             with open(CONFIG_FILE, "w") as f:
                 f.write("")
         config = dict4ini.DictIni(CONFIG_FILE, hideData=True)
         for widget in self.required_fields:
-            field_name = widget.objectName().replace("edt_", "")
-            field_name = field_name.encode('utf-8')
-            config.baniu[field_name] = widget.text()
+            if widget.text():
+                field_name = widget.objectName().replace("edt_", "")
+                field_name = field_name.encode('utf-8')
+                config.baniu[field_name] = widget.text()
+        config.baniu['dir'] = self._default_dir
         config.save()
-        self.alert(self.tr("Config was saved into {0}").format(CONFIG_FILE))
 
     def upload(self):
         """
@@ -160,27 +178,33 @@ class MainWindow(QtGui.QMainWindow):
         checked = self._check_required()
         if not checked:
             return
-        apikey, apisecret, bucket_name = self._get_required()
-        prefix = self.ui.edt_prefix.text().encode('utf-8')
+        apikey, apisecret, self.bucket_name = self._get_required()
+        self.prefix = self.ui.edt_prefix.text().encode('utf-8')
         items = self._get_table_items()
         if not items:
             self.alert(self.tr("Please select files or directories first."))
             return
         files = [item[0] for item in items if item[-1] == 'f']
         dirs = [item[0] for item in items if item[-1] == 'd']
+
+        # First get files_with_dir: {"path": ['files_in_path', ...]}
         files_with_dir = {}
         for dir_ in dirs:
             files_with_dir[dir_] = self._get_all_files(dir_)
         files_with_dir.update({".": files})
+
+        # Get filekeys for files and files in dirs.
         filekey_data = self._get_filekey_for_files(files_with_dir)
+
+        # Threading upload.
         for item in filekey_data.iteritems():
             files_queue.put(item)
 
         self.ui.progressBar.setMaximum(files_queue.qsize())
 
         for i in range(10):
-            self.task = ThreadingUploader(bucket_name, apikey, apisecret,
-                                          prefix, parent=self)
+            self.task = ThreadingUploader(self.bucket_name, apikey, apisecret,
+                                          self.prefix, parent=self)
             self.task.uploaded.connect(self.update_progress)
             self._thread_pool.append(self.task)
 
@@ -192,7 +216,11 @@ class MainWindow(QtGui.QMainWindow):
         self.ui.statusbar.showMessage(msg)
         self.ui.progressBar.setValue(uploaded_queue.qsize())
 
+    def closeEvent(self, event):
+        self.exit()
+
     def exit(self):
+        self._save_config()
         exit()
 
     def _get_filekey_for_files(self, files_with_dir):
@@ -216,8 +244,16 @@ class MainWindow(QtGui.QMainWindow):
             else:
                 for file_ in abs_path_list:
                     # XXX: simply replace the root_path to ''
+
+                    # Changed since 0.1.7:
+                    # if root_path is not '.', we will upload files
+                    # with root_path.last_leaf_name.
+                    # Say if path `c:/os/os/aaa` was selected through
+                    # self.select_dir, since 0.1.7, the upload filekey will
+                    # be `aaa/bbb.css`
+                    path_ = os.path.dirname(root_path)
                     filekey = file_.replace(
-                        u"{}{}".format(root_path, os.sep), '')
+                        u"{}{}".format(path_, os.sep), '')
                     filekey = filekey.encode('utf-8')
                     filekey = filekey.replace(os.sep, '/')
                     temp[filekey] = file_
@@ -247,7 +283,7 @@ class MainWindow(QtGui.QMainWindow):
         Recursively get the absolute path of the files in `root_dir`.
 
         Return:
-         file_abs_path list.
+         file_with_abs_path list.
         """
         ret_files = []
         for root, dirs, files in os.walk(root_dir):
