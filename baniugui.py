@@ -219,6 +219,7 @@ class MainWindow(QtGui.QMainWindow):
                     filekey = file_.replace(
                         u"{}{}".format(root_path, os.sep), '')
                     filekey = filekey.encode('utf-8')
+                    filekey = filekey.replace(os.sep, '/')
                     temp[filekey] = file_
             ret.update(temp)
         return ret
