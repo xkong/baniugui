@@ -23,7 +23,7 @@ from main_ui import Ui_MainWindow
 CONFIG_FILE = "baniu.ini"
 files_queue = Queue.Queue()
 uploaded_queue = Queue.Queue()
-__version__ = "0.1.7"
+__version__ = "0.1.7 build 0096"
 QT_VERSION_STR = "4.8"
 PYSIDE_VERSION_STR = "1.2.2"
 
@@ -252,9 +252,8 @@ class MainWindow(QtGui.QMainWindow):
                     # self.select_dir, since 0.1.7, the upload filekey will
                     # be `aaa/bbb.css`
                     path_ = os.path.dirname(root_path)
-                    filekey = file_.replace(
-                        u"{}{}".format(path_, os.sep), '')
-                    filekey = filekey.encode('utf-8')
+                    filekey = file_.replace(path_, '')
+                    filekey = filekey[1:].encode('utf-8')
                     filekey = filekey.replace(os.sep, '/')
                     temp[filekey] = file_
             ret.update(temp)
